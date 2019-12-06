@@ -12,6 +12,8 @@ import time, os, sys
 import tensorflow as tf
 import numpy as np
 
+from attack import fgsm, apply_fgsm, flip, apply_flip
+
 from utils import load_data, construct_feed_dict
 from utils import preprocess_features, preprocess_adj, chebyshev_polynomials
 from models import GCN
@@ -63,8 +65,8 @@ sess = tf.Session(config=config)
 def evaluate(features, support, labels, mask, placeholders):
     t_test = time.time()
     feed_dict_val = construct_feed_dict(features, support, labels, mask, placeholders)
-    outs_val = sess.run([model.loss, model.accuracy, model.grad], feed_dict=feed_dict_val)
-    return outs_val[0], outs_val[1], (time.time() - t_test), outs_val[2][0]
+    outs_val = sess.run([model.loss, model.accuracy], feed_dict=feed_dict_val)
+    return outs_val[0], outs_val[1], (time.time() - t_test)
  
 
 # Init variables
@@ -78,9 +80,23 @@ save_path = "../model/cora_gcn"
 model.load(save_path, sess)
 
 # Testing
-test_cost, test_acc, test_duration, grad = evaluate(features_dense, support, y_test, test_mask, placeholders)
-print(grad)
-print(grad.shape)
+test_cost, test_acc, test_duration = evaluate(features_dense, support, y_test, test_mask, placeholders)
 print("Test set results:", "cost=", "{:.5f}".format(test_cost),
       "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
 
+# FGSM
+epsilons = [0.1, 0.03, 0.01, 0.003, 0.001]
+for epsilon in epsilons:
+    features_delta = fgsm(model, construct_feed_dict(features_dense, support, y_test, test_mask, placeholders),
+                          sess, epsilon)
+    features_dense_adv = apply_fgsm(features_dense, features_delta, False)
+    test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
+    print("FGSM({:.5f})".format(epsilon), "results:", "cost=", "{:.5f}".format(test_cost),
+          "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+    
+features_delta = flip(model, construct_feed_dict(features_dense, support, y_test, test_mask, placeholders),
+                      features_dense, sess)
+features_dense_adv = apply_flip(features_dense, features_delta)
+test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
+print("Flip", "results:", "cost=", "{:.5f}".format(test_cost),
+      "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration),)
