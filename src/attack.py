@@ -29,5 +29,5 @@ def apply_flip(x, delta):
     
     x = np.abs(np.sign(x) - delta)
     x_sum =  x.sum(1)[:, np.newaxis]
-    x = x / x_sum
+    x = x / (x_sum+1e-10)
     return x
