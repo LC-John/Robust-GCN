@@ -12,10 +12,10 @@ import time, os, sys
 import tensorflow as tf
 import numpy as np
 
-from attack import fgsm, apply_fgsm, flip, apply_flip
+from attack import fgsm, flip, flip_single
 
 from utils import load_data, construct_feed_dict
-from utils import preprocess_features, preprocess_adj, chebyshev_polynomials
+from utils import preprocess_features, preprocess_adj
 from models import GCN
 
 # Set random seed
@@ -79,28 +79,55 @@ print("Optimization Finished!")
 save_path = "../model/cora_gcn"
 model.load(save_path, sess)
 
+print ("Test set size = {:d}\n".format(test_mask.sum()))
+
 # Testing
 test_cost, test_acc, test_duration = evaluate(features_dense, support, y_test, test_mask, placeholders)
 print("Test set results:", "cost=", "{:.5f}".format(test_cost),
       "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+print()
 
 # FGSM
 epsilons = [0.1, 0.03, 0.01, 0.003, 0.001]
-for epsilon in epsilons:
-    features_delta = fgsm(model, construct_feed_dict(features_dense, support, y_test, test_mask, placeholders),
-                          sess, epsilon)
-    features_dense_adv = apply_fgsm(features_dense, features_delta, False)
+for epsilon in epsilons[::-1]:
+    features_dense_adv = fgsm(model=model,
+                              feed_dict=construct_feed_dict(features_dense, support, y_test, test_mask, placeholders),
+                              features=features_dense,
+                              sess=sess,
+                              epsilon=epsilon)
     test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
-    print("FGSM({:.5f})".format(epsilon), "results:", "cost=", "{:.5f}".format(test_cost),
-          "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+    print("FGSM({:.3f})".format(epsilon), "results:", "cost=", "{:.5f}".format(test_cost),
+          "accuracy=", "{:.5f}".format(test_acc),
+          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
+          "time=", "{:.5f}".format(test_duration))
+print()
     
 # Flip
 n_flip = 5
 features_dense_adv = features_dense
 for i in range(n_flip):
-    features_delta = flip(model, construct_feed_dict(features_dense_adv, support, y_test, test_mask, placeholders),
-                          features_dense_adv, sess)
-    features_dense_adv = apply_flip(features_dense_adv, features_delta)
+    features_dense_adv = flip(model=model,
+                              feed_dict=construct_feed_dict(features_dense_adv, support, y_test, test_mask, placeholders),
+                              features=features_dense_adv,
+                              sess=sess)
     test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
     print("Flip({:d})".format(i+1), "results:", "cost=", "{:.5f}".format(test_cost),
-          "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration),)
+          "accuracy=", "{:.5f}".format(test_acc),
+          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
+          "time=", "{:.5f}".format(test_duration))
+print()
+
+# Single Flip
+n_flip = 1000
+features_dense_adv = features_dense
+for i in range(n_flip):
+    features_dense_adv = flip_single(model=model,
+                                     feed_dict=construct_feed_dict(features_dense_adv, support, y_test, test_mask, placeholders),
+                                     features=features_dense_adv,
+                                     sess=sess)
+    test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
+    print("SingleFlip({:d})".format(i+1), "results:", "cost=", "{:.5f}".format(test_cost),
+          "accuracy=", "{:.5f}".format(test_acc),
+          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
+          "time=", "{:.5f}".format(test_duration))
+print()
