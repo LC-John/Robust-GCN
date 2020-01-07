@@ -11,6 +11,7 @@ from __future__ import print_function
 import time, os, sys
 import tensorflow as tf
 import numpy as np
+from tqdm import tqdm
 
 from attack import fgsm, flip, flip_single
 
@@ -67,7 +68,48 @@ def evaluate(features, support, labels, mask, placeholders):
     feed_dict_val = construct_feed_dict(features, support, labels, mask, placeholders)
     outs_val = sess.run([model.loss, model.accuracy], feed_dict=feed_dict_val)
     return outs_val[0], outs_val[1], (time.time() - t_test)
- 
+
+# Define attacking epoch
+def attack(attacker, attacker_name, model, features, support, y, mask, placeholders, sess, **kw):
+
+    mask_split = []
+    results = []
+    cost, acc = 0, 0
+    for i in range(len(mask)):
+        if mask[i] == True:
+            mask_tmp = mask.copy()
+            mask_tmp[:i] = False
+            mask_tmp[i+1:] = False
+            mask_tmp[i] = True
+            mask_split.append(mask_tmp)
+            results.append([])
+    if attacker_name.lower() == 'fgsm':
+        assert ('epsilon' in kw)
+        for i in tqdm(range(len(mask_split))):
+            results[i].append(fgsm(model=model,
+                                   feed_dict=construct_feed_dict(features, support, y, mask_split[i], placeholders),
+                                   features=features,
+                                   sess=sess,
+                                   epsilon=kw['epsilon']))
+            cost_tmp, acc_tmp, _ = evaluate(results[i][-1], support, y, mask_split[i], placeholders)
+            cost += cost_tmp
+            acc += acc_tmp
+    elif attacker_name.lower() == 'flip_single':
+        assert ('n_flip' in kw)
+        for i in tqdm(range(len(mask_split))):
+            features_tmp = features.copy()
+            for it in range(kw['n_flip']):
+                features_tmp = flip_single(model=model,
+                                           feed_dict=construct_feed_dict(features_tmp, support, y, mask_split[i], placeholders),
+                                           features=features_tmp,
+                                           sess=sess)
+            results[i].append(features_tmp)
+            cost_tmp, acc_tmp, _ = evaluate(results[i][-1], support, y, mask_split[i], placeholders)
+            cost += cost_tmp
+            acc += acc_tmp
+    else:
+        assert False
+    return results, cost / len(mask_split), acc / len(mask_split)
 
 # Init variables
 sess.run(tf.global_variables_initializer())
@@ -79,7 +121,7 @@ print("Optimization Finished!")
 save_path = "../model/cora_gcn"
 model.load(save_path, sess)
 
-print ("Test set size = {:d}\n".format(test_mask.sum()))
+print ("\nTest set size = {:d}".format(test_mask.sum()))
 
 # Testing
 test_cost, test_acc, test_duration = evaluate(features_dense, support, y_test, test_mask, placeholders)
@@ -87,47 +129,48 @@ print("Test set results:", "cost=", "{:.5f}".format(test_cost),
       "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
 print()
 
-# FGSM
-epsilons = [0.1, 0.03, 0.01, 0.003, 0.001]
-for epsilon in epsilons[::-1]:
-    features_dense_adv = fgsm(model=model,
-                              feed_dict=construct_feed_dict(features_dense, support, y_test, test_mask, placeholders),
-                              features=features_dense,
-                              sess=sess,
-                              epsilon=epsilon)
-    test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
-    print("FGSM({:.3f})".format(epsilon), "results:", "cost=", "{:.5f}".format(test_cost),
-          "accuracy=", "{:.5f}".format(test_acc),
-          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
-          "time=", "{:.5f}".format(test_duration))
-print()
-    
-# Flip
-n_flip = 5
-features_dense_adv = features_dense
-for i in range(n_flip):
-    features_dense_adv = flip(model=model,
-                              feed_dict=construct_feed_dict(features_dense_adv, support, y_test, test_mask, placeholders),
-                              features=features_dense_adv,
-                              sess=sess)
-    test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
-    print("Flip({:d})".format(i+1), "results:", "cost=", "{:.5f}".format(test_cost),
-          "accuracy=", "{:.5f}".format(test_acc),
-          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
-          "time=", "{:.5f}".format(test_duration))
+# Single Flip
+n_flips = 10
+for n_flip in range(1, n_flips+1):
+    features_dense_adv_list, cost_adv, acc_adv = attack(attacker=flip_single,
+                                                        attacker_name="flip_single",
+                                                        model=model,
+                                                        features=features_dense,
+                                                        support=support,
+                                                        y=y_test,
+                                                        mask=test_mask,
+                                                        placeholders=placeholders,
+                                                        sess=sess,
+                                                        n_flip=n_flip)
+    dist = 0
+    for features_adv in features_dense_adv_list:
+        dist += np.abs(features_dense-features_adv[-1]).sum()
+    print("Flip({:d})".format(n_flip), "results:",
+          "cost=", "{:.4f}".format(cost_adv),
+          "accuracy=", "{:.4f}".format(acc_adv),
+          "dist=", "{:.4f}".format(dist/len(features_dense_adv_list)))
+    del features_dense_adv_list
 print()
 
-# Single Flip
-n_flip = 1000
-features_dense_adv = features_dense
-for i in range(n_flip):
-    features_dense_adv = flip_single(model=model,
-                                     feed_dict=construct_feed_dict(features_dense_adv, support, y_test, test_mask, placeholders),
-                                     features=features_dense_adv,
-                                     sess=sess)
-    test_cost, test_acc, test_duration = evaluate(features_dense_adv, support, y_test, test_mask, placeholders)
-    print("SingleFlip({:d})".format(i+1), "results:", "cost=", "{:.5f}".format(test_cost),
-          "accuracy=", "{:.5f}".format(test_acc),
-          "dist=", "{:.1f}".format(np.abs(features_dense-features_dense_adv).sum()),
-          "time=", "{:.5f}".format(test_duration))
+# FGSM
+epsilons = [0.00333, 0.001, 0.000333, 0.0001, 0.0000333, 0.00001]
+for epsilon in epsilons[::-1]:
+    features_dense_adv_list, cost_adv, acc_adv = attack(attacker=fgsm,
+                                                        attacker_name="fgsm",
+                                                        model=model,
+                                                        features=features_dense,
+                                                        support=support,
+                                                        y=y_test,
+                                                        mask=test_mask,
+                                                        placeholders=placeholders,
+                                                        sess=sess,
+                                                        epsilon=epsilon)
+    dist = 0
+    for features_adv in features_dense_adv_list:
+        dist += np.abs(features_dense-features_adv[-1]).sum()
+    print("FGSM({:.5f})".format(epsilon), "results:",
+          "cost=", "{:.4f}".format(cost_adv),
+          "accuracy=", "{:.4f}".format(acc_adv),
+          "dist=", "{:.4f}".format(dist/len(features_dense_adv_list)))
+    del features_dense_adv_list
 print()
